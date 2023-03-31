@@ -7,9 +7,29 @@ using Terraria.ModLoader.Core;
 
 namespace Terraria.ModLoader;
 
-public abstract class GlobalType : ModType, IIndexed
+public struct GlobalIndex
 {
-	public ushort Index { get; internal set; }
+	/// <summary>
+	/// Index in the <see cref="GlobalList{TGlobal}.Globals"/> array.
+	/// </summary>
+	public int StaticIndex;
+
+	/// <summary>
+	/// Index in the <see cref="IEntityWithGlobals{TGlobal}.EntityGlobals"/> or -1 if the global does not have a <see cref="GlobalType{TGlobal}.SlotPerEntity"/>
+	/// </summary>
+	public int PerEntityIndex;
+}
+
+public abstract class GlobalType<TGlobal> : ModType where TGlobal : GlobalType<TGlobal>
+{
+	public GlobalIndex Index { get; internal set; }
+
+	/// <summary>
+	/// Whether this global has <see cref="InstancePerEntity"/> or can be conditionally applied (overrides <see cref="GlobalType{TEntity, TGlobal}.AppliesToEntity(TEntity, bool)"/>) <br/>
+	/// If true, the global will be assigned a <see cref="GlobalIndex.PerEntityIndex"/> at load time, which can be used to access the instance in the <see cref="IEntityWithGlobals{TGlobal}.EntityGlobals"/> array. <br/>
+	/// If false, the global will be a singleton applying to all entities
+	/// </summary>
+	public virtual bool SlotPerEntity => InstancePerEntity;
 
 	/// <summary>
 	/// Whether to create a new instance of this Global for every entity that exists.
@@ -18,70 +38,58 @@ public abstract class GlobalType : ModType, IIndexed
 	/// </summary>
 	public virtual bool InstancePerEntity => false;
 
-	internal GlobalType() { }
-
 	protected override void ValidateType()
 	{
 		base.ValidateType();
 
-		var type = GetType();
-		bool hasInstanceFields = type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-			.Any(f => f.DeclaringType.IsSubclassOf(typeof(GlobalType)));
+		bool hasInstanceFields = GetType().GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+			.Any(f => f.DeclaringType.IsSubclassOf(typeof(GlobalType<TGlobal>)));
 
 		if (hasInstanceFields && !InstancePerEntity)
 			throw new Exception($" {GetType().FullName} instance fields but {nameof(InstancePerEntity)} returns false. Either use static fields, or override {nameof(InstancePerEntity)} to return true");
 	}
 
-	public static T Instance<T>(Instanced<T>[] globals, ushort index) where T : class
+	protected override void Register()
 	{
-		// TODO, binary search or something better
-		for (int i = 0; i < globals.Length; i++) {
-			var g = globals[i];
+		ModTypeLookup<TGlobal>.Register((TGlobal)this);
+		Index = GlobalList<TGlobal>.Register((TGlobal)this);
+	}
 
-			if (g.Index == index) {
-				return g.Instance;
-			}
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public static TResult GetGlobal<TResult>(ReadOnlySpan<TGlobal> entityGlobals, TResult baseInstance) where TResult : TGlobal
+		=> TryGetGlobal(entityGlobals, baseInstance, out TResult result) ? result : throw new KeyNotFoundException(baseInstance.FullName);
+
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public static TResult GetGlobal<TResult>(ReadOnlySpan<TGlobal> entityGlobals) where TResult : TGlobal
+		=> TryGetGlobal(entityGlobals, out TResult result) ? result : throw new KeyNotFoundException(typeof(TResult).FullName);
+
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public static bool TryGetGlobal<TResult>(ReadOnlySpan<TGlobal> entityGlobals, TResult baseInstance, out TResult result) where TResult : TGlobal
+	{
+		var index = baseInstance.Index;
+		if (index.PerEntityIndex >= 0) {
+			result = (TResult)entityGlobals[index.PerEntityIndex];
+			return result != null;
 		}
-
-		return default;
+		result = (TResult)GlobalList<TGlobal>.Globals[index.StaticIndex];
+		return true;
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public static TResult GetGlobal<TGlobal, TResult>(Instanced<TGlobal>[] globals, TResult baseInstance) where TGlobal : GlobalType where TResult : TGlobal
-		=> TryGetGlobal(globals, baseInstance, out TResult result) ? result : throw new KeyNotFoundException(baseInstance.FullName);
-
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public static TResult GetGlobal<TGlobal, TResult>(Instanced<TGlobal>[] globals) where TGlobal : GlobalType where TResult : TGlobal
-		=> TryGetGlobal(globals, out TResult result) ? result : throw new KeyNotFoundException(typeof(TResult).FullName);
-
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public static bool TryGetGlobal<TGlobal, TResult>(Instanced<TGlobal>[] globals, TResult baseInstance, out TResult result) where TGlobal : GlobalType where TResult : TGlobal
-	{
-		if (baseInstance == null) {
-			result = default;
-			return false;
-		}
-
-		result = Instance(globals, baseInstance.Index) as TResult;
-		return result != null;
-	}
-
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public static bool TryGetGlobal<TGlobal, TResult>(Instanced<TGlobal>[] globals, out TResult result) where TGlobal : GlobalType where TResult : TGlobal
-	{
-		result = (TResult)Instance(globals, ModContent.GetInstance<TResult>().Index);
-		return result != null;
-	}
+	public static bool TryGetGlobal<TResult>(ReadOnlySpan<TGlobal> entityGlobals, out TResult result) where TResult : TGlobal
+		=> TryGetGlobal(entityGlobals, ModContent.GetInstance<TResult>(), out result);
 }
 
-public abstract class GlobalType<TEntity, TGlobal> : GlobalType where TGlobal : GlobalType<TEntity, TGlobal>
+public abstract class GlobalType<TEntity, TGlobal> : GlobalType<TGlobal> where TGlobal : GlobalType<TEntity, TGlobal> where TEntity : IEntityWithGlobals<TGlobal>
 {
+	public override bool SlotPerEntity => base.SlotPerEntity || LoaderUtils.HasOverride(this, m => (Func<TEntity, bool, bool>)m.AppliesToEntity);
+
 	private bool? _isCloneable;
 	/// <summary>
 	/// Whether or not this type is cloneable. Cloning is supported if<br/>
 	/// all reference typed fields in each sub-class which doesn't override Clone are marked with [CloneByReference]
 	/// </summary>
-	public virtual bool IsCloneable => _isCloneable ??= Cloning.IsCloneable<GlobalType<TEntity, TGlobal>, Func<TEntity, TEntity, TGlobal>>(this, m => m.Clone);
+	public virtual bool IsCloneable => _isCloneable ??= Cloning.IsCloneable(this, m => (Func<TEntity, TEntity, TGlobal>)m.Clone);
 
 	/// <summary>
 	/// Whether to create new instances of this mod type via <see cref="Clone"/> or via the default constructor
@@ -115,7 +123,7 @@ public abstract class GlobalType<TEntity, TGlobal> : GlobalType where TGlobal : 
 	}
 
 	/// <summary>
-	/// Only called if <see cref="GlobalType.InstancePerEntity"/> and <see cref="AppliesToEntity"/>(<paramref name="target"/>, ...) are both true
+	/// Only called if <see cref="GlobalType{TGlobal}.InstancePerEntity"/> and <see cref="AppliesToEntity"/>(<paramref name="target"/>, ...) are both true
 	/// </summary>
 	/// <param name="target">The entity instance the global is being instantiated for</param>
 	/// <returns></returns>
@@ -128,5 +136,11 @@ public abstract class GlobalType<TEntity, TGlobal> : GlobalType where TGlobal : 
 		inst.Mod = Mod;
 		inst.Index = Index;
 		return inst;
+	}
+
+	public TGlobal Instance(TEntity entity)
+	{
+		TryGetGlobal(entity.EntityGlobals, (TGlobal)this, out TGlobal result);
+		return result;
 	}
 }

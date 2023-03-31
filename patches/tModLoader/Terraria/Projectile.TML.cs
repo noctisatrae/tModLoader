@@ -16,9 +16,8 @@ public partial class Projectile : IEntityWithGlobals<GlobalProjectile>
 	/// </summary>
 	public ModProjectile ModProjectile { get; internal set; }
 
-	internal Instanced<GlobalProjectile>[] globalProjectiles = Array.Empty<Instanced<GlobalProjectile>>();
-
-	public RefReadOnlyArray<Instanced<GlobalProjectile>> Globals => new RefReadOnlyArray<Instanced<GlobalProjectile>>(globalProjectiles);
+	internal GlobalProjectile[] _globals;
+	public RefReadOnlyArray<GlobalProjectile> EntityGlobals => new(_globals);
 
 	/// <summary>
 	/// <inheritdoc cref="Projectile.NewProjectile(IEntitySource, float, float, float, float, int, int, float, int, float, float, float)"/>
@@ -126,22 +125,22 @@ public partial class Projectile : IEntityWithGlobals<GlobalProjectile>
 	/// <exception cref="KeyNotFoundException"/>
 	/// <exception cref="IndexOutOfRangeException"/>
 	public T GetGlobalProjectile<T>() where T : GlobalProjectile
-		=> GlobalType.GetGlobal<GlobalProjectile, T>(globalProjectiles);
+		=> GlobalProjectile.GetGlobal<T>(EntityGlobals);
 
 	/// <summary> Gets the local instance of the type of the specified GlobalProjectile instance. This will throw exceptions on failure. </summary>
 	/// <exception cref="KeyNotFoundException"/>
 	/// <exception cref="NullReferenceException"/>
 	public T GetGlobalProjectile<T>(T baseInstance) where T : GlobalProjectile
-		=> GlobalType.GetGlobal(globalProjectiles, baseInstance);
+		=> GlobalProjectile.GetGlobal(EntityGlobals, baseInstance);
 
 	/// <summary> Gets the instance of the specified GlobalProjectile type. </summary>
 	public bool TryGetGlobalProjectile<T>(out T result) where T : GlobalProjectile
-		=> GlobalType.TryGetGlobal(globalProjectiles, out result);
+		=> GlobalProjectile.TryGetGlobal(EntityGlobals, out result);
 
 	/// <summary> Safely attempts to get the local instance of the type of the specified GlobalProjectile instance. </summary>
 	/// <returns> Whether or not the requested instance has been found. </returns>
 	public bool TryGetGlobalProjectile<T>(T baseInstance, out T result) where T : GlobalProjectile
-		=> GlobalType.TryGetGlobal(globalProjectiles, baseInstance, out result);
+		=> GlobalProjectile.TryGetGlobal(EntityGlobals, baseInstance, out result);
 
 	public bool CountsAsClass<T>() where T : DamageClass
 		=> CountsAsClass(ModContent.GetInstance<T>());
